@@ -18,6 +18,10 @@ This gives a project a way to use a different version of a package than the
 one pinned by an imported snapshot, without downloading and editing the
 snapshot.
 
+As this is the first change to the shape of an existing project file field,
+the proposal also suggests introducing a `cabal-version` field for project
+files, so that a project file can say which cabal-install it needs.
+
 ## Motivation
 
 Since cabal-install 3.8, a project can import a Stackage snapshot's
@@ -71,6 +75,30 @@ import: <location>
   Anything else, such as a version range, is a parse error.
 - The modifier may be repeated within one import; the lists are concatenated.
 - An `import` with no modifiers is unchanged.
+
+The modifiers live entirely inside the value of the `import` field. At the
+level of the field envelope, the layer that splits a file into fields,
+sections and their lines, an import with modifiers is an ordinary multi-line
+field and nothing new. This matters for the
+[Cabal exact printer proposal](https://github.com/haskell/cabal-proposals/pull/7),
+which works on that envelope and states that it covers project descriptions
+too, with roundtripping already tested against the project files in the cabal
+repository. An exact printer that preserves the lines of a multi-line field
+preserves import modifiers without knowing about them. The modifier grammar
+is only applied to those lines afterwards, in `parseImportSpec`.
+
+The exact printer work in flight on the cabal repository bears this out.
+[Retain comments in field parser #11252](https://github.com/haskell/cabal/pull/11252)
+changes the lexer to keep comments as annotations on fields rather than
+dropping them, and
+[Exactprinter & modification framework, take 2 #12316](https://github.com/haskell/cabal/pull/12316),
+stacked on it, adds the printer and a typed editing API. Neither changes what
+a field's lines are. Their only touch on the project file parsers is to add
+the annotation slot to the `Field` pattern, one line above the import
+handling this proposal changes, so the two land together with a trivial
+merge. Comment lines inside a multi-line field are already skipped by the
+lexer, so a comment between the import location and a modifier line does not
+split the field, and with #11252 that comment is kept for printing.
 
 ### Semantics
 
@@ -183,10 +211,59 @@ hidden packages and `--hide-successes`.
   the import location and will fail to find a file by that name. This is the
   same situation as any new project file field. A project that must support
   older versions can keep using the download-and-edit workaround.
-- No change to the `Cabal` library, the `.cabal` file format, or the
-  `cabal-version` spec.
+- No change to the `Cabal` library or to the `.cabal` file format. The
+  `hide-constraints` modifier itself does not touch the package description
+  spec version; the project file version field suggested below would reuse
+  its type but not change its meaning for `.cabal` files.
 - No change to solver behaviour. The solver sees fewer constraints; it does
   not see new kinds of input.
+
+### Versioning the project file
+
+The failure mode above is the general one for project files: an older
+cabal-install has no way to say "this file uses syntax I do not understand"
+and instead fails on whatever the new syntax happens to look like to it. A
+`.cabal` file avoids this with `cabal-version`, which both tells an old tool
+to stop with a clear message and lets a new tool parse the file according to
+the version it declares. `cabal.project` has no such field. The parsec project
+file parser already parses every field at `cabalSpecLatest`, a placeholder
+for exactly this.
+
+This proposal is a good occasion to introduce one, because it is the first
+change to the shape of a project file field rather than the addition of a new
+field. Concretely:
+
+- A top-level `cabal-version` field for `cabal.project` and the files it
+  imports, taking the same values as the field of the same name in a `.cabal`
+  file.
+- A file without the field is parsed as today.
+- An old cabal-install that sees a version newer than it knows reports that
+  the project file needs a newer cabal-install, naming the version, before it
+  tries to interpret anything else. This does not help with cabal-install
+  versions already released, but it helps from the next one on.
+- A new cabal-install parses the file according to the declared version. In
+  particular, the `hide-constraints` modifier is accepted at any version, since
+  the multi-line form was a parse error in practice before, but future changes
+  that alter the meaning of an existing field could be gated on it.
+
+Whether `cabal-version` is the right name is open. Reusing it makes the field
+recognisable and ties the project file grammar to the same version series as
+the package description grammar, which is what the parsec parser already
+assumes. A distinct name such as `project-version` would allow the two to
+evolve separately at the cost of a second version series to document.
+
+The exact printer proposal makes a version field easier to live with. Once
+cabal can modify a project file in place without disturbing its comments and
+layout, it can add or bump the version field itself when a user reaches for
+syntax that needs it, as `cabal init` does for `cabal-version` in a package
+description today. Tools that generate project files from snapshots could
+likewise insert `hide-constraints` lines through the typed API rather than by
+rewriting the file.
+
+Versioning the project file is separable from `hide-constraints` and could be
+its own proposal. It is raised here because the compatibility question this
+change poses is the one a version field answers, and because doing it before
+the next change to the project file grammar is easier than after.
 
 ## Interested parties
 
@@ -197,6 +274,10 @@ hidden packages and `--hide-successes`.
   usable without local edits. They have not been contacted.
 - Haskell Language Server and hie-bios, which drive the cabal executable
   rather than parsing project files themselves, so no work is expected there.
+- The authors of the Cabal exact printer proposal, since this is the first
+  project file field whose value has internal structure spanning several
+  lines. They have not been contacted. The expectation is that nothing is
+  needed from the exact printer beyond preserving multi-line fields.
 
 ## Implementation Notes
 
@@ -232,6 +313,10 @@ The change is about 470 lines including tests and docs.
 - Should there be a way to hide only version constraints while keeping flag
   constraints, for example `hide-constraints: hashable (version)`? Nothing in
   the syntax rules it out. It is left out until there is a use case.
+- Should a `cabal-version` field for project files be part of this proposal
+  or split into its own? If part of this one, should `hide-constraints`
+  require a minimum declared version, or be accepted at any version as
+  proposed above?
 - Is `import:` with modifiers the right place to grow further per-import
   settings, such as pinning an index-state for a remote import or
   hiding other fields? This proposal establishes the syntax but only
@@ -250,3 +335,6 @@ The change is about 470 lines including tests and docs.
   documenting the current download-and-edit workaround.
 - [Updo](https://blockscope.com/posts/2023-11-15-updo.html), a tool that
   generates project files from snapshots.
+- [Cabal Exactprint proposal](https://github.com/haskell/cabal-proposals/pull/7),
+  which states that it also covers project descriptions, and the
+  [exact printer mega-issue #7544](https://github.com/haskell/cabal/issues/7544).
