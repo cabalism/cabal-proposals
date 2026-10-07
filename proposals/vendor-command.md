@@ -296,7 +296,22 @@ This works today with existing commands, without changes to `cabal vendor`:
    vendored.
 
 The same steps apply to a vendored `source-repository-package` dependency,
-whose tarball is the source distribution of its checkout.
+whose tarball is the source distribution of its checkout. One caveat: the
+shadowing above is of *repository* versions. A `source-repository-package`
+stanza is a package source in its own right, so if the stanza is still in the
+project file when the `packages:` line is added, the project has two sources
+for one package. Today that is the "multiple sources ... undefined" notice
+when the versions agree and a solver failure when they do not, which is one
+more reason to remove the stanza once the package is vendored. Under the
+companion proposal `proposal-override-packages.md` (#8463), the outcome
+depends on where the line goes: in `cabal.project.local` the directory
+outranks a stanza in `cabal.project` and wins with a notice, which suits
+this workflow since nothing committed changes; in `cabal.project` beside the
+stanza it is an error naming both. A stanza that lost this way is still
+cloned, because cabal only learns which package it provides by reading it,
+but its package is not in the plan, so `cabal vendor` will not list it among
+the stanzas that can be removed; the planning notice is what names it.
+
 
 **Getting a patch back out.** Because the pristine source stays in the vendor
 directory, a patch for upstream is the difference between a fresh unpack and
